@@ -1,0 +1,1155 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#faf9f5;color:#141413}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>Kharcha</title>
+<meta name="description" content="A monthly bucket budgeting app for Indian salaries: buckets, savings goals and smart expense categorisation.">
+<style>
+/* ---------------------------------------------------------------
+   Layout concept: mobile-app shell, fixed top bar (income summary),
+   scrollable content area with 4 tabbed views, fixed bottom nav.
+   Dialogs (static, never re-rendered) handle add/edit forms so
+   in-progress typing survives live db updates.
+------------------------------------------------------------------ */
+:root{
+  --bg:#EEF2EF; --surface:#FFFFFF; --surface-2:#E4EAE5;
+  --ink:#16261F; --muted:#5B6B62; --border:rgba(22,38,31,0.13);
+  --accent:#1F6F54; --accent-soft:#DCEAE3;
+  --gold:#A9781B; --gold-soft:#F1E6C8;
+  --good:#2E7D5B; --warn:#B4791F; --danger:#B23B3B;
+  --font-display:'Fraunces',Georgia,'Times New Roman',serif;
+  --font-body:'Manrope',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  --font-mono:'JetBrains Mono','SF Mono',Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0E1512; --surface:#16211C; --surface-2:#1D2B23;
+    --ink:#E8ECE9; --muted:#93A399; --border:rgba(232,236,233,0.14);
+    --accent:#4FD8A8; --accent-soft:rgba(79,216,168,0.14);
+    --gold:#E3C15A; --gold-soft:rgba(227,193,90,0.14);
+    --good:#4FD8A8; --warn:#E3A94F; --danger:#E6867E;
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0E1512; --surface:#16211C; --surface-2:#1D2B23;
+  --ink:#E8ECE9; --muted:#93A399; --border:rgba(232,236,233,0.14);
+  --accent:#4FD8A8; --accent-soft:rgba(79,216,168,0.14);
+  --gold:#E3C15A; --gold-soft:rgba(227,193,90,0.14);
+  --good:#4FD8A8; --warn:#E3A94F; --danger:#E6867E;
+  color-scheme:dark;
+}
+*{box-sizing:border-box;}
+html,body{height:100%;}
+body{
+  margin:0; background:var(--bg); color:var(--ink);
+  font-family:var(--font-body); font-size:15px; line-height:1.45;
+  display:flex; flex-direction:column; overflow-x:hidden;
+}
+h1,h2,h3{font-family:var(--font-display); font-weight:600; text-wrap:balance; margin:0;}
+.num{font-family:var(--font-mono); font-variant-numeric:tabular-nums;}
+button{font-family:inherit; cursor:pointer;}
+input,select{font-family:inherit; font-size:15px;}
+a{color:var(--accent);}
+
+/* ---- top bar ---- */
+.topbar{
+  position:sticky; top:env(safe-area-inset-top,0px); z-index:20;
+  background:var(--surface); border-bottom:1px solid var(--border);
+  padding:14px 18px; padding-top:calc(14px);
+}
+.topbar-row{display:flex; align-items:baseline; justify-content:space-between; gap:12px;}
+.topbar-row h1{font-size:19px;}
+.topbar .gear{
+  background:none; border:1px solid var(--border); border-radius:10px;
+  width:36px; height:36px; display:flex; align-items:center; justify-content:center;
+  color:var(--muted); font-size:17px; flex:none;
+}
+.topbar .gear:hover{color:var(--ink); border-color:var(--accent);}
+.topbar-stats{
+  display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-top:12px;
+}
+.topbar-stat{min-width:0;}
+.topbar-stat .label{font-size:10.5px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted);}
+.topbar-stat .value{font-size:16px; font-weight:700; margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+.topbar-stat .value.free-pos{color:var(--good);}
+.topbar-stat .value.free-neg{color:var(--danger);}
+
+/* ---- content ---- */
+.content{flex:1; overflow-y:auto; padding:16px 16px calc(96px); -webkit-overflow-scrolling:touch;}
+.view{display:flex; flex-direction:column; gap:14px; max-width:640px; margin:0 auto; width:100%;}
+.view[hidden]{display:none;}
+
+.card{
+  background:var(--surface); border:1px solid var(--border); border-radius:16px;
+  padding:16px;
+}
+.card + .card{margin-top:0;}
+.section-title{display:flex; align-items:center; justify-content:space-between; margin-bottom:2px;}
+.section-title h2{font-size:15px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); font-family:var(--font-body); font-weight:700;}
+
+.empty-state{
+  text-align:center; padding:28px 16px; color:var(--muted);
+}
+.empty-state .big{font-size:30px; margin-bottom:6px;}
+
+/* ---- bucket / goal rows ---- */
+.row-list{display:flex; flex-direction:column; gap:10px;}
+.bucket-card, .goal-card{
+  background:var(--surface); border:1px solid var(--border); border-radius:14px; padding:13px 14px;
+}
+.bc-top, .gc-top{display:flex; align-items:center; gap:10px;}
+.bc-icon, .gc-icon{font-size:20px; flex:none; width:30px; text-align:center;}
+.bc-name, .gc-name{font-weight:700; font-size:14.5px; min-width:0; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.bc-amounts{display:flex; align-items:baseline; gap:4px; flex:none; font-size:13px;}
+.bc-remaining{font-weight:700; font-size:14.5px;}
+.bc-of{color:var(--muted); font-size:12px;}
+.progress-track{height:7px; border-radius:99px; background:var(--surface-2); margin-top:9px; overflow:hidden;}
+.progress-fill{height:100%; border-radius:99px; background:var(--accent); transition:width .25s ease;}
+.progress-fill.warn{background:var(--warn);}
+.progress-fill.danger{background:var(--danger);}
+.bc-actions, .gc-actions{display:flex; gap:8px; margin-top:10px;}
+.chip-flex{font-size:10.5px; padding:2px 7px; border-radius:99px; background:var(--accent-soft); color:var(--accent); font-weight:700; letter-spacing:.03em; flex:none;}
+
+.gc-meta{display:flex; justify-content:space-between; font-size:12px; color:var(--muted); margin-top:8px;}
+.gc-badge-example{font-size:10px; padding:1px 7px; border-radius:99px; background:var(--gold-soft); color:var(--gold); font-weight:700; margin-left:6px;}
+
+/* ---- buttons ---- */
+.btn{
+  border:1px solid var(--border); background:var(--surface-2); color:var(--ink);
+  border-radius:10px; padding:8px 13px; font-size:13px; font-weight:600;
+}
+.btn:hover{border-color:var(--accent);}
+.btn-primary{background:var(--accent); border-color:var(--accent); color:#fff;}
+.btn-primary:hover{filter:brightness(1.06);}
+.btn-ghost{background:transparent; border-color:transparent; color:var(--muted); padding:8px 10px;}
+.btn-ghost:hover{color:var(--danger);}
+.btn-sm{padding:6px 10px; font-size:12px; border-radius:8px;}
+.btn-block{width:100%;}
+.btn:focus-visible, input:focus-visible, select:focus-visible, button:focus-visible{outline:2px solid var(--accent); outline-offset:2px;}
+.add-fab{
+  display:flex; align-items:center; justify-content:center; gap:7px;
+  border:1px dashed var(--border); background:transparent; color:var(--muted);
+  border-radius:14px; padding:13px; font-weight:700; font-size:13.5px;
+}
+.add-fab:hover{color:var(--accent); border-color:var(--accent);}
+
+/* ---- field ---- */
+.field{display:flex; flex-direction:column; gap:5px;}
+.field label{font-size:12px; font-weight:700; color:var(--muted); text-transform:uppercase; letter-spacing:.04em;}
+.field input, .field select, .field textarea{
+  background:var(--bg); border:1px solid var(--border); border-radius:10px;
+  padding:10px 11px; color:var(--ink); width:100%;
+}
+.field-row{display:flex; gap:10px;}
+.field-row > .field{flex:1; min-width:0;}
+.hint{font-size:11.5px; color:var(--muted);}
+.switch-row{display:flex; align-items:center; justify-content:space-between; gap:10px; padding:4px 2px;}
+.switch-row .field-label{font-size:13px; font-weight:600;}
+
+/* ---- suggestion / insight boxes ---- */
+.suggest-box{
+  background:var(--accent-soft); border-radius:10px; padding:10px 11px; font-size:12.5px; color:var(--ink);
+}
+.suggest-box b{color:var(--accent);}
+.warn-box{background:var(--gold-soft); border-radius:10px; padding:10px 11px; font-size:12.5px;}
+.warn-box b{color:var(--gold);}
+
+/* ---- transactions ---- */
+.txn-row{display:flex; align-items:center; gap:10px; padding:8px 0; border-bottom:1px solid var(--border);}
+.txn-row:last-child{border-bottom:none;}
+.txn-icon{width:30px; height:30px; border-radius:9px; background:var(--surface-2); display:flex; align-items:center; justify-content:center; font-size:14px; flex:none;}
+.txn-main{min-width:0; flex:1;}
+.txn-note{font-size:13.5px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+.txn-sub{font-size:11.5px; color:var(--muted);}
+.txn-amt{font-weight:700; font-size:13.5px; flex:none;}
+
+/* ---- log form ---- */
+.suggestion-pill{
+  display:inline-flex; align-items:center; gap:6px; background:var(--accent-soft); color:var(--accent);
+  border-radius:99px; padding:5px 11px; font-size:12px; font-weight:700; border:none; margin-top:6px;
+}
+.ai-btn{
+  display:inline-flex; align-items:center; gap:6px; background:var(--gold-soft); color:var(--gold);
+  border-radius:99px; padding:6px 12px; font-size:12px; font-weight:700; border:none; margin-top:8px;
+}
+.ai-btn[disabled]{opacity:.55;}
+
+/* ---- dialogs ---- */
+dialog{
+  border:none; border-radius:18px; padding:0; width:min(92vw,480px); color:var(--ink);
+  background:var(--surface); box-shadow:0 20px 60px rgba(0,0,0,.25);
+}
+dialog::backdrop{background:rgba(10,14,12,.5);}
+.dialog-body{padding:18px; display:flex; flex-direction:column; gap:13px; max-height:82vh; overflow-y:auto;}
+.dialog-head{display:flex; align-items:center; justify-content:space-between;}
+.dialog-head h3{font-size:17px;}
+.dialog-close{background:none; border:none; color:var(--muted); font-size:20px; line-height:1; padding:4px;}
+.dialog-actions{display:flex; gap:10px; margin-top:4px;}
+.dialog-actions .btn{flex:1;}
+
+/* ---- tab bar ---- */
+.tabbar{
+  position:fixed; left:0; right:0; bottom:0; z-index:20;
+  display:flex; background:var(--surface); border-top:1px solid var(--border);
+  padding-bottom:env(safe-area-inset-bottom,0px);
+}
+.tab{
+  flex:1; display:flex; flex-direction:column; align-items:center; gap:3px;
+  background:none; border:none; color:var(--muted); padding:10px 4px 9px; font-size:10.5px; font-weight:700;
+  letter-spacing:.01em;
+}
+.tab .ic{font-size:19px;}
+.tab.active{color:var(--accent);}
+
+/* ---- toast ---- */
+#toast{
+  position:fixed; left:50%; bottom:calc(84px + env(safe-area-inset-bottom,0px)); transform:translateX(-50%) translateY(10px);
+  background:var(--ink); color:var(--bg); padding:10px 16px; border-radius:99px; font-size:13px; font-weight:600;
+  opacity:0; pointer-events:none; transition:opacity .2s ease, transform .2s ease; z-index:50; white-space:nowrap;
+  max-width:88vw; overflow:hidden; text-overflow:ellipsis;
+}
+#toast.show{opacity:1; transform:translateX(-50%) translateY(0);}
+
+#banner-nodb{
+  background:var(--warn); color:#1b1400; font-size:12.5px; font-weight:700; text-align:center; padding:8px 14px;
+}
+
+@media (prefers-reduced-motion: reduce){ *{transition:none !important; animation:none !important;} }
+</style>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Manrope:wght@500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap">
+
+<div id="banner-nodb" hidden>Your browser is blocking local storage, so changes won't be saved after you close this tab.</div>
+
+<header class="topbar">
+  <div class="topbar-row">
+    <h1>Kharcha</h1>
+    <button class="gear" id="btn-settings" aria-label="Settings" type="button">⚙</button>
+  </div>
+  <div class="topbar-stats">
+    <div class="topbar-stat"><div class="label">In-hand</div><div class="value num" id="stat-income">-</div></div>
+    <div class="topbar-stat"><div class="label">Free this month</div><div class="value num" id="stat-free">-</div></div>
+    <div class="topbar-stat"><div class="label">Bank balance</div><div class="value num" id="stat-bank">-</div></div>
+  </div>
+</header>
+
+<div class="content">
+
+  <main class="view" id="view-overview">
+    <div class="card" id="ov-empty" hidden>
+      <div class="empty-state">
+        <div class="big">🪔</div>
+        <div><b>Setting up Kharcha…</b></div>
+        <div class="hint">Loading your buckets and goals.</div>
+      </div>
+    </div>
+
+    <div class="card" id="ov-balance-card">
+      <div class="section-title"><h2>Quick update</h2></div>
+      <div class="field-row" style="margin-top:8px;">
+        <div class="field">
+          <label for="ov-bank-input">Bank balance</label>
+          <input type="number" id="ov-bank-input" inputmode="decimal" placeholder="0">
+        </div>
+        <div class="field" style="flex:none; align-self:flex-end;">
+          <button class="btn btn-primary" id="ov-bank-save" type="button">Save</button>
+        </div>
+      </div>
+      <div class="hint">Update this whenever you check your account. Kharcha never connects to your bank.</div>
+    </div>
+
+    <div class="card">
+      <div class="section-title"><h2>This month's buckets</h2></div>
+      <div class="row-list" id="ov-buckets-list" style="margin-top:10px;"></div>
+    </div>
+
+    <div class="card">
+      <div class="section-title"><h2>Goals</h2></div>
+      <div class="row-list" id="ov-goals-list" style="margin-top:10px;"></div>
+    </div>
+
+    <div class="card">
+      <div class="section-title"><h2>Recent activity</h2></div>
+      <div id="ov-recent-list" style="margin-top:4px;"></div>
+    </div>
+  </main>
+
+  <main class="view" id="view-buckets" hidden>
+    <div class="card">
+      <div class="section-title"><h2>Monthly buckets</h2></div>
+      <div class="hint" style="margin-bottom:10px;">What's left to spend in each, this month.</div>
+      <div class="row-list" id="buckets-full-list"></div>
+      <button class="add-fab" style="margin-top:12px;" id="btn-add-bucket" type="button">+ Add a bucket</button>
+    </div>
+  </main>
+
+  <main class="view" id="view-goals" hidden>
+    <div class="card">
+      <div class="section-title"><h2>Savings goals</h2></div>
+      <div class="hint" style="margin-bottom:10px;">Trips, phones, sneakers, anything you're saving toward.</div>
+      <div class="row-list" id="goals-full-list"></div>
+      <button class="add-fab" style="margin-top:12px;" id="btn-add-goal" type="button">+ Add a goal</button>
+    </div>
+  </main>
+
+  <main class="view" id="view-log" hidden>
+    <div class="card">
+      <div class="section-title"><h2>Log an expense</h2></div>
+      <form id="log-form" style="display:flex; flex-direction:column; gap:13px; margin-top:10px;">
+        <div class="field">
+          <label for="log-amount">Amount</label>
+          <input type="number" id="log-amount" inputmode="decimal" min="0" step="1" placeholder="0" required>
+        </div>
+        <div class="field">
+          <label for="log-note">What was it for</label>
+          <input type="text" id="log-note" placeholder="e.g. Swiggy dinner, Blinkit groceries" autocomplete="off">
+          <div id="log-suggestion"></div>
+        </div>
+        <div class="field">
+          <label for="log-bucket">Bucket</label>
+          <select id="log-bucket"></select>
+        </div>
+        <div class="field">
+          <label for="log-date">Date</label>
+          <input type="date" id="log-date">
+        </div>
+        <button class="btn btn-primary btn-block" type="submit">Log expense</button>
+      </form>
+    </div>
+    <div class="card">
+      <div class="section-title"><h2>Logged today</h2></div>
+      <div id="log-today-list" style="margin-top:4px;"></div>
+    </div>
+  </main>
+
+</div>
+
+<nav class="tabbar">
+  <button class="tab active" data-tab="overview" type="button"><span class="ic">🏠</span>Overview</button>
+  <button class="tab" data-tab="buckets" type="button"><span class="ic">🗂️</span>Buckets</button>
+  <button class="tab" data-tab="goals" type="button"><span class="ic">🎯</span>Goals</button>
+  <button class="tab" data-tab="log" type="button"><span class="ic">✏️</span>Log</button>
+</nav>
+
+<div id="toast"></div>
+
+<!-- ============ Settings dialog ============ -->
+<dialog id="dialog-settings">
+  <div class="dialog-body">
+    <div class="dialog-head"><h3>Settings</h3><button class="dialog-close" data-close type="button">✕</button></div>
+    <div class="field">
+      <label for="set-income">Monthly in-hand income</label>
+      <input type="number" id="set-income" inputmode="decimal" min="0">
+    </div>
+    <div class="field">
+      <label for="set-bank">Bank balance</label>
+      <input type="number" id="set-bank" inputmode="decimal" min="0">
+    </div>
+    <div class="hint">Buckets and goals are managed from their own tabs. Deleting data here can't be undone.</div>
+    <div class="dialog-actions">
+      <button class="btn" data-close type="button">Cancel</button>
+      <button class="btn btn-primary" id="set-save" type="button">Save</button>
+    </div>
+  </div>
+</dialog>
+
+<!-- ============ Bucket dialog ============ -->
+<dialog id="dialog-bucket">
+  <form class="dialog-body" id="bucket-form">
+    <div class="dialog-head"><h3 id="bucket-dialog-title">Add bucket</h3><button class="dialog-close" data-close type="button">✕</button></div>
+    <input type="hidden" id="bucket-id">
+    <div class="field-row">
+      <div class="field" style="flex:none; width:64px;">
+        <label for="bucket-icon">Icon</label>
+        <input type="text" id="bucket-icon" maxlength="2" placeholder="🗂️">
+      </div>
+      <div class="field">
+        <label for="bucket-name">Name</label>
+        <input type="text" id="bucket-name" placeholder="e.g. Daily Expenses" required>
+      </div>
+    </div>
+    <div class="field">
+      <label for="bucket-allocated">Monthly allocation (₹)</label>
+      <input type="number" id="bucket-allocated" inputmode="decimal" min="0" required>
+    </div>
+    <div class="field">
+      <label for="bucket-keywords">Auto-categorize keywords</label>
+      <input type="text" id="bucket-keywords" placeholder="comma-separated, e.g. swiggy, zomato, dinner">
+      <div class="hint">Kharcha matches these against what you type when logging an expense.</div>
+    </div>
+    <div class="switch-row">
+      <div class="field-label">Flexible bucket</div>
+      <input type="checkbox" id="bucket-flexible" style="width:18px;height:18px;">
+    </div>
+    <div class="hint">Flexible buckets are the first ones trimmed when a new savings goal needs room.</div>
+    <div class="dialog-actions">
+      <button type="button" class="btn btn-ghost" id="bucket-delete" style="display:none;">Delete</button>
+      <button type="submit" class="btn btn-primary" style="flex:1;">Save bucket</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- ============ Goal dialog ============ -->
+<dialog id="dialog-goal">
+  <form class="dialog-body" id="goal-form">
+    <div class="dialog-head"><h3 id="goal-dialog-title">Add goal</h3><button class="dialog-close" data-close type="button">✕</button></div>
+    <input type="hidden" id="goal-id">
+    <div class="field-row">
+      <div class="field" style="flex:none; width:64px;">
+        <label for="goal-icon">Icon</label>
+        <input type="text" id="goal-icon" maxlength="2" placeholder="🎯">
+      </div>
+      <div class="field">
+        <label for="goal-name">Name</label>
+        <input type="text" id="goal-name" placeholder="e.g. Goa trip, new sneakers" required>
+      </div>
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label for="goal-target">Target amount (₹)</label>
+        <input type="number" id="goal-target" inputmode="decimal" min="1" required>
+      </div>
+      <div class="field">
+        <label for="goal-date">Target date</label>
+        <input type="date" id="goal-date" required>
+      </div>
+    </div>
+    <div class="field">
+      <label for="goal-saved">Already saved (₹)</label>
+      <input type="number" id="goal-saved" inputmode="decimal" min="0" value="0">
+    </div>
+    <div id="goal-plan"></div>
+    <div id="goal-ai-wrap"></div>
+    <div class="switch-row" id="goal-apply-row" hidden>
+      <div class="field-label">Apply suggested bucket trim</div>
+      <input type="checkbox" id="goal-apply-trim" checked style="width:18px;height:18px;">
+    </div>
+    <div class="dialog-actions">
+      <button type="button" class="btn btn-ghost" id="goal-delete" style="display:none;">Delete</button>
+      <button type="submit" class="btn btn-primary" style="flex:1;">Save goal</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- ============ Contribution dialog ============ -->
+<dialog id="dialog-contribute">
+  <form class="dialog-body" id="contribute-form">
+    <div class="dialog-head"><h3>Add contribution</h3><button class="dialog-close" data-close type="button">✕</button></div>
+    <input type="hidden" id="contribute-goal-id">
+    <div id="contribute-goal-name" style="font-weight:700;"></div>
+    <div class="field">
+      <label for="contribute-amount">Amount (₹)</label>
+      <input type="number" id="contribute-amount" inputmode="decimal" min="1" required>
+    </div>
+    <div class="dialog-actions">
+      <button type="submit" class="btn btn-primary" style="flex:1;">Add</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+/* Local storage adapter: the app was first built as a Claude artifact with a hosted
+   database. This small adapter gives it the same API backed by the browser's
+   localStorage, so it runs anywhere (GitHub Pages included). Data never leaves
+   the device. */
+(function(){
+  var KEY="kharcha:v1", persist=true, store=null;
+  try{ localStorage.setItem("kharcha:t","1"); localStorage.removeItem("kharcha:t"); store=JSON.parse(localStorage.getItem(KEY)||"null"); }catch(e){ persist=false; }
+  if(!store) store={docs:{},cols:{}};
+  window.__kharchaPersist=persist;
+  var listeners=new Set();
+  function clone(o){ return JSON.parse(JSON.stringify(o)); }
+  function uid(){ return Math.random().toString(36).slice(2,12); }
+  function save(){ if(persist){ try{ localStorage.setItem(KEY,JSON.stringify(store)); }catch(e){} } listeners.forEach(function(fn){ try{ fn(); }catch(e){} }); }
+  function col(name){ return store.cols[name]||(store.cols[name]={}); }
+  function docRef(path){
+    function snap(){ var d=store.docs[path]; return {exists:!!d, data:function(){ return clone(d||{}); }}; }
+    return {
+      get:async function(){ return snap(); },
+      set:async function(o){ store.docs[path]=clone(o); save(); },
+      update:async function(o){ store.docs[path]=Object.assign({},store.docs[path]||{},clone(o)); save(); },
+      onSnapshot:function(cb){ var f=function(){ cb(snap()); }; listeners.add(f); setTimeout(f,0); return function(){ listeners.delete(f); }; }
+    };
+  }
+  function query(name,filters,order){
+    function snap(){
+      var rows=Object.keys(col(name)).map(function(id){ return {id:id,v:col(name)[id]}; });
+      filters.forEach(function(q){ rows=rows.filter(function(r){ return q[1]==="=="?r.v[q[0]]===q[2]:true; }); });
+      if(order){ rows.sort(function(a,b){ var x=a.v[order[0]],y=b.v[order[0]],r=x<y?-1:x>y?1:0; return order[1]==="desc"?-r:r; }); }
+      var docs=rows.map(function(r){ return {id:r.id,data:function(){ return clone(r.v); }}; });
+      return {empty:docs.length===0,docs:docs};
+    }
+    return {
+      where:function(f,op,v){ return query(name,filters.concat([[f,op,v]]),order); },
+      orderBy:function(f,dir){ return query(name,filters,[f,dir||"asc"]); },
+      get:async function(){ return snap(); },
+      onSnapshot:function(cb){ var f=function(){ cb(snap()); }; listeners.add(f); setTimeout(f,0); return function(){ listeners.delete(f); }; },
+      add:async function(o){ var id=uid(); col(name)[id]=clone(o); save(); return {id:id}; },
+      doc:function(id){ return {
+        update:async function(o){ col(name)[id]=Object.assign({},col(name)[id]||{},clone(o)); save(); },
+        set:async function(o){ col(name)[id]=clone(o); save(); },
+        delete:async function(){ delete col(name)[id]; save(); }
+      }; }
+    };
+  }
+  var db={ doc:docRef, collection:function(n){ return query(n,[],null); } };
+  window.claude={ use:async function(cap){ if(cap==="db") return db; var e=new Error("not available"); e.code="not_granted"; throw e; } };
+})();
+</script>
+<script>
+(function(){
+"use strict";
+
+const fmt = n => { n = Number(n)||0; const sign = n<0 ? "−" : ""; return sign + "₹" + Math.round(Math.abs(n)).toLocaleString("en-IN"); };
+const todayISO = () => new Date().toISOString().slice(0,10);
+const monthOf = (iso) => (iso||todayISO()).slice(0,7);
+const currentMonth = () => monthOf(todayISO());
+const esc = s => String(s==null?"":s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const uid = () => Math.random().toString(36).slice(2,10);
+
+function addMonthsISO(n){
+  const d = new Date();
+  d.setMonth(d.getMonth()+n);
+  return d.toISOString().slice(0,10);
+}
+function monthsUntil(dateStr){
+  const target = new Date(dateStr+"T00:00:00");
+  const now = new Date();
+  let months = (target.getFullYear()-now.getFullYear())*12 + (target.getMonth()-now.getMonth());
+  if (target.getDate() < now.getDate()) months -= 1;
+  return Math.max(1, months);
+}
+function humanMonthsLeft(dateStr){
+  const m = monthsUntil(dateStr);
+  if (m<=1) return "about a month left";
+  return m + " months left";
+}
+
+const state = { config:null, buckets:[], goals:[], transactions:[], ready:{config:false,buckets:false,goals:false,transactions:false} };
+let db = null, sample = null;
+
+function toast(msg){
+  const t = document.getElementById("toast");
+  t.textContent = msg;
+  t.classList.add("show");
+  clearTimeout(toast._t);
+  toast._t = setTimeout(()=>t.classList.remove("show"), 2200);
+}
+
+/* ---------------- seeding ---------------- */
+const DEFAULT_BUCKETS = [
+  {name:"Family Transfer", icon:"🏡", allocated:5000, flexible:false, keywords:["mom","mother","ghar kharcha","household"], order:0},
+  {name:"Daily Expenses", icon:"🛒", allocated:10000, flexible:true, keywords:["grocery","zepto","blinkit","instamart","kirana","milk","vegetables","groceries"], order:1},
+  {name:"SIP / Investments", icon:"📈", allocated:10000, flexible:false, keywords:["sip","mutual fund","zerodha","groww","investment"], order:2},
+  {name:"Insurance", icon:"🛡️", allocated:1500, flexible:false, keywords:["insurance","premium","lic","policybazaar","term plan"], order:3},
+  {name:"Emergency Fund", icon:"🧯", allocated:8000, flexible:false, keywords:["emergency","liquid fund"], order:4},
+  {name:"Luxury / Lifestyle", icon:"🎬", allocated:12000, flexible:true, keywords:["swiggy","zomato","movie","pvr","dinner","dining","amazon","myntra","sneakers","trip","bar","pub","bookmyshow","cafe"], order:5},
+  {name:"Buffer", icon:"🧰", allocated:4000, flexible:true, keywords:["misc","gift","other"], order:6}
+];
+
+async function ensureSeed(){
+  if (!db) return;
+  try{
+    const cfgSnap = await db.doc("config/main").get();
+    if (!cfgSnap.exists){
+      await db.doc("config/main").set({monthlyIncome:60000, bankBalance:0, createdAt:new Date().toISOString()});
+    }
+    const bSnap = await db.collection("buckets").get();
+    if (bSnap.empty){
+      for (const b of DEFAULT_BUCKETS){ await db.collection("buckets").add(b); }
+    }
+    const gSnap = await db.collection("goals").get();
+    if (gSnap.empty){
+      await db.collection("goals").add({
+        name:"New Phone", icon:"📱", targetAmount:40000, savedAmount:0,
+        targetDate: addMonthsISO(4), monthlyContribution:0, example:true, order:0,
+        createdAt:new Date().toISOString()
+      });
+    }
+  } catch(e){ /* best-effort seed */ }
+}
+
+/* ---------------- subscriptions ---------------- */
+function subscribeAll(){
+  if (!db) { renderAll(); return; }
+
+  db.doc("config/main").onSnapshot(snap=>{
+    state.config = snap.exists ? snap.data() : {monthlyIncome:0, bankBalance:0};
+    state.ready.config = true;
+    syncSettingsInputs();
+    renderAll();
+  }, ()=>{ state.ready.config = true; renderAll(); });
+
+  db.collection("buckets").orderBy("order","asc").onSnapshot(snap=>{
+    state.buckets = snap.docs.map(d=>Object.assign({id:d.id}, d.data()));
+    state.ready.buckets = true;
+    refreshLogBucketOptions();
+    renderAll();
+  }, ()=>{ state.ready.buckets = true; renderAll(); });
+
+  db.collection("goals").orderBy("order","asc").onSnapshot(snap=>{
+    state.goals = snap.docs.map(d=>Object.assign({id:d.id}, d.data()));
+    state.ready.goals = true;
+    renderAll();
+  }, ()=>{ state.ready.goals = true; renderAll(); });
+
+  db.collection("transactions").where("month","==",currentMonth()).orderBy("date","desc").onSnapshot(snap=>{
+    state.transactions = snap.docs.map(d=>Object.assign({id:d.id}, d.data()));
+    state.ready.transactions = true;
+    renderAll();
+  }, ()=>{ state.ready.transactions = true; renderAll(); });
+}
+
+/* ---------------- derived numbers ---------------- */
+function bucketSpent(bucketId){
+  return state.transactions
+    .filter(t=>t.type==="expense" && t.bucketId===bucketId)
+    .reduce((s,t)=>s+Number(t.amount||0),0);
+}
+function bucketsTotal(){ return state.buckets.reduce((s,b)=>s+Number(b.allocated||0),0); }
+function goalsMonthlyTotal(){ return state.goals.reduce((s,g)=>s+Number(g.monthlyContribution||0),0); }
+function freeAmount(){
+  const income = Number(state.config && state.config.monthlyIncome || 0);
+  return income - bucketsTotal() - goalsMonthlyTotal();
+}
+
+/* ---------------- goal reallocation planner ---------------- */
+function planGoal(targetAmount, targetDate, savedAmount, excludeGoalId){
+  const months = monthsUntil(targetDate);
+  const needed = Math.max(0, (Number(targetAmount||0) - Number(savedAmount||0))) / months;
+  const otherGoalsTotal = state.goals
+    .filter(g=>g.id !== excludeGoalId)
+    .reduce((s,g)=>s+Number(g.monthlyContribution||0),0);
+  const income = Number(state.config && state.config.monthlyIncome || 0);
+  const freeBefore = income - bucketsTotal() - otherGoalsTotal;
+
+  const plan = { months, needed, freeBefore, shortfall:0, trims:[], stillShort:0, fundable:needed };
+
+  if (needed <= freeBefore){ return plan; }
+
+  plan.shortfall = needed - freeBefore;
+  const flexible = state.buckets.filter(b=>b.flexible && Number(b.allocated||0) > 0);
+  const totalFlex = flexible.reduce((s,b)=>s+Number(b.allocated||0),0);
+
+  if (totalFlex <= 0){ plan.stillShort = plan.shortfall; plan.fundable = Math.max(0, freeBefore); return plan; }
+
+  let trimmed = 0;
+  for (const b of flexible){
+    const floor = Math.max(1000, Math.round(Number(b.allocated)*0.4));
+    const share = plan.shortfall * (Number(b.allocated)/totalFlex);
+    const newAlloc = Math.max(floor, Math.round(Number(b.allocated) - share));
+    const cut = Number(b.allocated) - newAlloc;
+    if (cut > 0){ plan.trims.push({id:b.id, name:b.name, icon:b.icon, from:Number(b.allocated), to:newAlloc, cut}); trimmed += cut; }
+  }
+  const rem = plan.shortfall - trimmed;
+  plan.stillShort = rem > 1 ? rem : 0;
+  plan.fundable = needed - plan.stillShort;
+  return plan;
+}
+
+/* ---------------- categorization ---------------- */
+function suggestBucket(note){
+  const text = (note||"").toLowerCase();
+  if (!text.trim()) return null;
+  let best=null, bestScore=0;
+  for (const b of state.buckets){
+    const kws = b.keywords || [];
+    let score = 0;
+    for (const k of kws){ if (k && text.indexOf(String(k).toLowerCase()) !== -1) score++; }
+    if (score > bestScore){ bestScore = score; best = b; }
+  }
+  return best;
+}
+
+/* ================= RENDER ================= */
+function renderAll(){
+  const allReady = state.ready.config && state.ready.buckets && state.ready.goals && state.ready.transactions;
+  document.getElementById("ov-empty").hidden = !db || allReady;
+
+  renderTopbar();
+  renderOverviewBuckets();
+  renderOverviewGoals();
+  renderRecent("ov-recent-list", state.transactions.slice(0,6));
+  renderBucketsFull();
+  renderGoalsFull();
+  renderTodayLog();
+}
+
+function renderTopbar(){
+  const income = Number(state.config && state.config.monthlyIncome || 0);
+  const bank = Number(state.config && state.config.bankBalance || 0);
+  const free = freeAmount();
+  document.getElementById("stat-income").textContent = income ? fmt(income) : "-";
+  document.getElementById("stat-bank").textContent = state.config ? fmt(bank) : "-";
+  const freeEl = document.getElementById("stat-free");
+  freeEl.textContent = state.config ? fmt(free) : "-";
+  freeEl.classList.toggle("free-pos", free >= 0);
+  freeEl.classList.toggle("free-neg", free < 0);
+}
+
+function progressClass(spent, allocated){
+  if (allocated <= 0) return "";
+  const pct = spent/allocated;
+  if (pct > 1) return "danger";
+  if (pct > 0.8) return "warn";
+  return "";
+}
+
+function bucketRowHTML(b, full){
+  const spent = bucketSpent(b.id);
+  const remaining = Number(b.allocated||0) - spent;
+  const pct = Number(b.allocated) > 0 ? Math.min(100, Math.round(spent/Number(b.allocated)*100)) : 0;
+  const pcls = progressClass(spent, Number(b.allocated||0));
+  return `<div class="bucket-card" data-id="${b.id}">
+    <div class="bc-top">
+      <div class="bc-icon">${esc(b.icon||"🗂️")}</div>
+      <div class="bc-name">${esc(b.name)}</div>
+      ${b.flexible ? '<span class="chip-flex">Flexible</span>' : ''}
+      <div class="bc-remaining ${remaining<0 ? 'num' : 'num'}" style="color:${remaining<0?'var(--danger)':'var(--ink)'}">${fmt(remaining)}</div>
+    </div>
+    <div class="progress-track"><div class="progress-fill ${pcls}" style="width:${pct}%"></div></div>
+    <div class="bc-of" style="margin-top:5px;">${fmt(spent)} spent of ${fmt(b.allocated)}</div>
+    ${full ? `<div class="bc-actions">
+      <button class="btn btn-sm" data-action="edit-bucket" data-id="${b.id}" type="button">Edit</button>
+    </div>` : ``}
+  </div>`;
+}
+
+function renderOverviewBuckets(){
+  const el = document.getElementById("ov-buckets-list");
+  if (!state.buckets.length){ el.innerHTML = emptyRow("No buckets yet, add one from the Buckets tab."); return; }
+  el.innerHTML = state.buckets.map(b=>bucketRowHTML(b,false)).join("");
+}
+function renderBucketsFull(){
+  const el = document.getElementById("buckets-full-list");
+  if (!state.buckets.length){ el.innerHTML = emptyRow("No buckets yet. Add your first one below."); return; }
+  el.innerHTML = state.buckets.map(b=>bucketRowHTML(b,true)).join("");
+}
+
+function goalRowHTML(g, full){
+  const target = Number(g.targetAmount||0);
+  const saved = Number(g.savedAmount||0);
+  const pct = target>0 ? Math.min(100, Math.round(saved/target*100)) : 0;
+  const pcls = pct>=100 ? "" : "";
+  return `<div class="goal-card" data-id="${g.id}">
+    <div class="gc-top">
+      <div class="gc-icon">${esc(g.icon||"🎯")}</div>
+      <div class="gc-name">${esc(g.name)}${g.example ? '<span class="gc-badge-example">Example</span>' : ''}</div>
+      <div class="bc-remaining num">${fmt(saved)}<span class="bc-of"> / ${fmt(target)}</span></div>
+    </div>
+    <div class="progress-track"><div class="progress-fill ${pcls}" style="width:${pct}%"></div></div>
+    <div class="gc-meta">
+      <span>${g.targetDate ? humanMonthsLeft(g.targetDate) : ''}</span>
+      <span>${g.monthlyContribution ? fmt(g.monthlyContribution)+'/mo' : 'not funded yet'}</span>
+    </div>
+    ${full ? `<div class="gc-actions">
+      <button class="btn btn-sm btn-primary" data-action="contribute" data-id="${g.id}" type="button">+ Contribute</button>
+      <button class="btn btn-sm" data-action="edit-goal" data-id="${g.id}" type="button">Edit</button>
+    </div>` : ``}
+  </div>`;
+}
+function renderOverviewGoals(){
+  const el = document.getElementById("ov-goals-list");
+  if (!state.goals.length){ el.innerHTML = emptyRow("No goals yet, start one from the Goals tab."); return; }
+  el.innerHTML = state.goals.map(g=>goalRowHTML(g,false)).join("");
+}
+function renderGoalsFull(){
+  const el = document.getElementById("goals-full-list");
+  if (!state.goals.length){ el.innerHTML = emptyRow("No goals yet. Add your first one below."); return; }
+  el.innerHTML = state.goals.map(g=>goalRowHTML(g,true)).join("");
+}
+
+function emptyRow(msg){ return `<div class="empty-state" style="padding:16px;"><div class="hint">${esc(msg)}</div></div>`; }
+
+function iconForTxn(t){
+  if (t.type === "goal") return "🎯";
+  const b = state.buckets.find(x=>x.id===t.bucketId);
+  return b ? (b.icon||"🗂️") : "💸";
+}
+function labelForTxn(t){
+  if (t.type === "goal"){ const g = state.goals.find(x=>x.id===t.goalId); return g ? g.name : "Goal contribution"; }
+  const b = state.buckets.find(x=>x.id===t.bucketId);
+  return b ? b.name : "Uncategorized";
+}
+function renderRecent(elId, list){
+  const el = document.getElementById(elId);
+  if (!list.length){ el.innerHTML = emptyRow("Nothing logged yet this month."); return; }
+  el.innerHTML = list.map(t=>`<div class="txn-row">
+    <div class="txn-icon">${esc(iconForTxn(t))}</div>
+    <div class="txn-main">
+      <div class="txn-note">${esc(t.note || labelForTxn(t))}</div>
+      <div class="txn-sub">${esc(labelForTxn(t))} · ${esc(t.date||"")}</div>
+    </div>
+    <div class="txn-amt">${t.type==="goal" ? "+" : "−"}${fmt(t.amount)}</div>
+  </div>`).join("");
+}
+function renderTodayLog(){
+  const today = todayISO();
+  const list = state.transactions.filter(t=>t.date===today);
+  renderRecent("log-today-list", list);
+}
+
+/* ---------------- settings sync ---------------- */
+function syncSettingsInputs(){
+  if (!state.config) return;
+  const incomeEl = document.getElementById("set-income");
+  const bankSetEl = document.getElementById("set-bank");
+  const bankOvEl = document.getElementById("ov-bank-input");
+  if (document.activeElement !== incomeEl) incomeEl.value = state.config.monthlyIncome || 0;
+  if (document.activeElement !== bankSetEl) bankSetEl.value = state.config.bankBalance || 0;
+  if (document.activeElement !== bankOvEl) bankOvEl.value = state.config.bankBalance || 0;
+}
+
+/* ---------------- log bucket <select> ---------------- */
+let lastBucketOptionIds = "";
+function refreshLogBucketOptions(){
+  const sel = document.getElementById("log-bucket");
+  const ids = state.buckets.map(b=>b.id).join(",");
+  const prevValue = sel.value;
+  if (ids === lastBucketOptionIds && sel.options.length) return;
+  lastBucketOptionIds = ids;
+  sel.innerHTML = state.buckets.map(b=>`<option value="${b.id}">${esc(b.icon||"")} ${esc(b.name)}</option>`).join("");
+  if (state.buckets.some(b=>b.id===prevValue)) sel.value = prevValue;
+}
+
+/* ================= TABS ================= */
+function showTab(name){
+  for (const v of document.querySelectorAll(".view")) v.hidden = (v.id !== "view-"+name);
+  for (const t of document.querySelectorAll(".tab")) t.classList.toggle("active", t.dataset.tab === name);
+  if (name === "log"){ const d = document.getElementById("log-date"); if (!d.value) d.value = todayISO(); }
+}
+document.querySelectorAll(".tab").forEach(t=>t.addEventListener("click", ()=>showTab(t.dataset.tab)));
+
+/* ================= DIALOG HELPERS ================= */
+function openDialog(id){ document.getElementById(id).showModal(); }
+function closeDialog(id){ document.getElementById(id).close(); }
+document.querySelectorAll("[data-close]").forEach(btn=>{
+  btn.addEventListener("click", ()=>{ const dlg = btn.closest("dialog"); if (dlg) dlg.close(); });
+});
+document.querySelectorAll("dialog").forEach(dlg=>{
+  dlg.addEventListener("click", (e)=>{ if (e.target === dlg) dlg.close(); });
+});
+
+/* ---------------- settings dialog ---------------- */
+document.getElementById("btn-settings").addEventListener("click", ()=>{ syncSettingsInputs(); openDialog("dialog-settings"); });
+document.getElementById("set-save").addEventListener("click", async ()=>{
+  const income = Number(document.getElementById("set-income").value||0);
+  const bank = Number(document.getElementById("set-bank").value||0);
+  if (!db){ toast("Storage unavailable"); return; }
+  try{
+    await db.doc("config/main").set({monthlyIncome:income, bankBalance:bank, updatedAt:new Date().toISOString()});
+    toast("Settings saved");
+    closeDialog("dialog-settings");
+  }catch(e){ toast("Couldn't save, try again"); }
+});
+document.getElementById("ov-bank-save").addEventListener("click", async ()=>{
+  const bank = Number(document.getElementById("ov-bank-input").value||0);
+  if (!db){ toast("Storage unavailable"); return; }
+  try{
+    await db.doc("config/main").update({bankBalance:bank, updatedAt:new Date().toISOString()});
+    toast("Bank balance updated");
+  }catch(e){ toast("Couldn't save, try again"); }
+});
+
+/* ---------------- bucket dialog ---------------- */
+document.getElementById("btn-add-bucket").addEventListener("click", ()=>{
+  document.getElementById("bucket-dialog-title").textContent = "Add bucket";
+  document.getElementById("bucket-id").value = "";
+  document.getElementById("bucket-icon").value = "🗂️";
+  document.getElementById("bucket-name").value = "";
+  document.getElementById("bucket-allocated").value = "";
+  document.getElementById("bucket-keywords").value = "";
+  document.getElementById("bucket-flexible").checked = false;
+  document.getElementById("bucket-delete").style.display = "none";
+  openDialog("dialog-bucket");
+});
+
+function openEditBucket(id){
+  const b = state.buckets.find(x=>x.id===id);
+  if (!b) return;
+  document.getElementById("bucket-dialog-title").textContent = "Edit bucket";
+  document.getElementById("bucket-id").value = b.id;
+  document.getElementById("bucket-icon").value = b.icon||"";
+  document.getElementById("bucket-name").value = b.name||"";
+  document.getElementById("bucket-allocated").value = b.allocated||0;
+  document.getElementById("bucket-keywords").value = (b.keywords||[]).join(", ");
+  document.getElementById("bucket-flexible").checked = !!b.flexible;
+  document.getElementById("bucket-delete").style.display = "";
+  openDialog("dialog-bucket");
+}
+
+document.getElementById("bucket-form").addEventListener("submit", async (e)=>{
+  e.preventDefault();
+  if (!db){ toast("Storage unavailable"); return; }
+  const id = document.getElementById("bucket-id").value;
+  const data = {
+    icon: document.getElementById("bucket-icon").value.trim() || "🗂️",
+    name: document.getElementById("bucket-name").value.trim(),
+    allocated: Number(document.getElementById("bucket-allocated").value||0),
+    flexible: document.getElementById("bucket-flexible").checked,
+    keywords: document.getElementById("bucket-keywords").value.split(",").map(s=>s.trim()).filter(Boolean)
+  };
+  if (!data.name){ toast("Give the bucket a name"); return; }
+  try{
+    if (id){ await db.collection("buckets").doc(id).update(data); }
+    else { data.order = state.buckets.length; await db.collection("buckets").add(data); }
+    toast("Bucket saved");
+    closeDialog("dialog-bucket");
+  }catch(e2){ toast("Couldn't save, try again"); }
+});
+document.getElementById("bucket-delete").addEventListener("click", async ()=>{
+  const btn = document.getElementById("bucket-delete");
+  if (btn.dataset.confirm !== "1"){
+    btn.dataset.confirm = "1"; btn.textContent = "Confirm delete?";
+    setTimeout(()=>{ btn.dataset.confirm=""; btn.textContent="Delete"; }, 3000);
+    return;
+  }
+  const id = document.getElementById("bucket-id").value;
+  if (!db || !id) return;
+  try{ await db.collection("buckets").doc(id).delete(); toast("Bucket deleted"); closeDialog("dialog-bucket"); }
+  catch(e){ toast("Couldn't delete"); }
+  btn.dataset.confirm=""; btn.textContent="Delete";
+});
+
+/* ---------------- goal dialog ---------------- */
+function renderGoalPlan(){
+  const target = Number(document.getElementById("goal-target").value||0);
+  const date = document.getElementById("goal-date").value;
+  const saved = Number(document.getElementById("goal-saved").value||0);
+  const excludeId = document.getElementById("goal-id").value || null;
+  const planEl = document.getElementById("goal-plan");
+  const applyRow = document.getElementById("goal-apply-row");
+  if (!target || !date){ planEl.innerHTML=""; applyRow.hidden = true; return null; }
+
+  const plan = planGoal(target, date, saved, excludeId);
+  let html = "";
+  if (plan.shortfall <= 0){
+    html = `<div class="suggest-box"><b>${fmt(plan.needed)}/month</b> gets you there by your target date, fits within what's currently free (${fmt(plan.freeBefore)}/month).</div>`;
+    applyRow.hidden = true;
+  } else if (plan.trims.length){
+    const trimLines = plan.trims.map(t=>`${esc(t.icon)} ${esc(t.name)}: ${fmt(t.from)} → ${fmt(t.to)}`).join("<br>");
+    html = `<div class="warn-box"><b>Short by ${fmt(plan.shortfall)}/month.</b> Suggested trim from flexible buckets:<br>${trimLines}`
+      + (plan.stillShort>0 ? `<br>Still ${fmt(plan.stillShort)}/month short even after trimming, this will fund at ${fmt(plan.fundable)}/month.` : ``)
+      + `</div>`;
+    applyRow.hidden = false;
+  } else {
+    html = `<div class="warn-box"><b>Short by ${fmt(plan.shortfall)}/month</b> and no flexible buckets to trim. This will fund at ${fmt(Math.max(0,plan.fundable))}/month, extend the date or free up a bucket.</div>`;
+    applyRow.hidden = true;
+  }
+  planEl.innerHTML = html;
+  return plan;
+}
+["goal-target","goal-date","goal-saved"].forEach(id=>{
+  document.getElementById(id).addEventListener("input", renderGoalPlan);
+});
+
+document.getElementById("goal-ai-wrap").innerHTML = "";
+async function showAiGoalHelp(){
+  const wrap = document.getElementById("goal-ai-wrap");
+  if (!sample){ return; }
+  wrap.innerHTML = `<button type="button" class="ai-btn" id="goal-ai-btn">✨ Get AI suggestions</button><div id="goal-ai-out" class="hint" style="margin-top:6px;"></div>`;
+  document.getElementById("goal-ai-btn").addEventListener("click", async ()=>{
+    const btn = document.getElementById("goal-ai-btn");
+    const out = document.getElementById("goal-ai-out");
+    const plan = renderGoalPlan();
+    if (!plan){ out.textContent = "Fill in the amount and date first."; return; }
+    btn.disabled = true; out.textContent = "Thinking...";
+    const bucketList = state.buckets.map(b=>`${b.name} (${b.flexible?"flexible":"fixed"}): ₹${b.allocated}/mo`).join(", ");
+    const prompt = `I'm saving ₹${document.getElementById("goal-target").value} by ${document.getElementById("goal-date").value} `
+      + `for "${document.getElementById("goal-name").value||"a goal"}". I need about ₹${Math.round(plan.needed)}/month. `
+      + `I'm short by ₹${Math.round(plan.shortfall)}/month after my fixed commitments. My current monthly buckets: ${bucketList}. `
+      + `In 2-3 short sentences, give me practical, specific suggestions for closing this gap without touching fixed buckets like SIP, insurance, or emergency fund. Plain text, no markdown.`;
+    try{
+      const res = await sample(prompt, {modelTier:"quick", onText:({text})=>{ out.textContent = text; }});
+      out.textContent = res.text;
+    }catch(e){
+      out.textContent = e.code === "not_granted" ? "" : "Couldn't reach AI suggestions right now.";
+    } finally { btn.disabled = false; }
+  });
+}
+
+document.getElementById("btn-add-goal").addEventListener("click", ()=>{
+  document.getElementById("goal-dialog-title").textContent = "Add goal";
+  document.getElementById("goal-id").value = "";
+  document.getElementById("goal-icon").value = "🎯";
+  document.getElementById("goal-name").value = "";
+  document.getElementById("goal-target").value = "";
+  document.getElementById("goal-date").value = addMonthsISO(3);
+  document.getElementById("goal-saved").value = 0;
+  document.getElementById("goal-delete").style.display = "none";
+  document.getElementById("goal-plan").innerHTML = "";
+  document.getElementById("goal-apply-row").hidden = true;
+  showAiGoalHelp();
+  openDialog("dialog-goal");
+});
+
+function openEditGoal(id){
+  const g = state.goals.find(x=>x.id===id);
+  if (!g) return;
+  document.getElementById("goal-dialog-title").textContent = "Edit goal";
+  document.getElementById("goal-id").value = g.id;
+  document.getElementById("goal-icon").value = g.icon||"";
+  document.getElementById("goal-name").value = g.name||"";
+  document.getElementById("goal-target").value = g.targetAmount||0;
+  document.getElementById("goal-date").value = g.targetDate||addMonthsISO(3);
+  document.getElementById("goal-saved").value = g.savedAmount||0;
+  document.getElementById("goal-delete").style.display = "";
+  renderGoalPlan();
+  showAiGoalHelp();
+  openDialog("dialog-goal");
+}
+
+document.getElementById("goal-form").addEventListener("submit", async (e)=>{
+  e.preventDefault();
+  if (!db){ toast("Storage unavailable"); return; }
+  const id = document.getElementById("goal-id").value;
+  const target = Number(document.getElementById("goal-target").value||0);
+  const date = document.getElementById("goal-date").value;
+  const saved = Number(document.getElementById("goal-saved").value||0);
+  const name = document.getElementById("goal-name").value.trim();
+  if (!name || !target || !date){ toast("Fill in name, target and date"); return; }
+
+  const plan = planGoal(target, date, saved, id||null);
+  const applyTrim = !document.getElementById("goal-apply-row").hidden && document.getElementById("goal-apply-trim").checked;
+
+  const data = {
+    icon: document.getElementById("goal-icon").value.trim() || "🎯",
+    name, targetAmount: target, targetDate: date, savedAmount: saved,
+    monthlyContribution: Math.round(plan.fundable)
+  };
+
+  try{
+    if (id){
+      await db.collection("goals").doc(id).update(data);
+    } else {
+      data.order = state.goals.length; data.example = false;
+      await db.collection("goals").add(data);
+    }
+    if (applyTrim && plan.trims.length){
+      for (const t of plan.trims){ await db.collection("buckets").doc(t.id).update({allocated:t.to}); }
+    }
+    toast("Goal saved");
+    closeDialog("dialog-goal");
+  }catch(e2){ toast("Couldn't save, try again"); }
+});
+document.getElementById("goal-delete").addEventListener("click", async ()=>{
+  const btn = document.getElementById("goal-delete");
+  if (btn.dataset.confirm !== "1"){
+    btn.dataset.confirm = "1"; btn.textContent = "Confirm delete?";
+    setTimeout(()=>{ btn.dataset.confirm=""; btn.textContent="Delete"; }, 3000);
+    return;
+  }
+  const id = document.getElementById("goal-id").value;
+  if (!db || !id) return;
+  try{ await db.collection("goals").doc(id).delete(); toast("Goal deleted"); closeDialog("dialog-goal"); }
+  catch(e){ toast("Couldn't delete"); }
+  btn.dataset.confirm=""; btn.textContent="Delete";
+});
+
+/* ---------------- contribution dialog ---------------- */
+function openContribute(goalId){
+  const g = state.goals.find(x=>x.id===goalId);
+  if (!g) return;
+  document.getElementById("contribute-goal-id").value = goalId;
+  document.getElementById("contribute-goal-name").textContent = `${g.icon||"🎯"} ${g.name}`;
+  document.getElementById("contribute-amount").value = g.monthlyContribution || "";
+  openDialog("dialog-contribute");
+}
+document.getElementById("contribute-form").addEventListener("submit", async (e)=>{
+  e.preventDefault();
+  if (!db){ toast("Storage unavailable"); return; }
+  const goalId = document.getElementById("contribute-goal-id").value;
+  const amount = Number(document.getElementById("contribute-amount").value||0);
+  const g = state.goals.find(x=>x.id===goalId);
+  if (!g || amount<=0) return;
+  try{
+    await db.collection("goals").doc(goalId).update({savedAmount:(Number(g.savedAmount||0)+amount)});
+    await db.collection("transactions").add({type:"goal", goalId, amount, note:"", date:todayISO(), month:currentMonth(), createdAt:new Date().toISOString()});
+    toast(`Added ${fmt(amount)} to ${g.name}`);
+    closeDialog("dialog-contribute");
+  }catch(e2){ toast("Couldn't save, try again"); }
+});
+
+/* ---------------- row action delegation ---------------- */
+document.addEventListener("click", (e)=>{
+  const btn = e.target.closest("[data-action]");
+  if (!btn) return;
+  const id = btn.dataset.id;
+  const action = btn.dataset.action;
+  if (action === "edit-bucket") openEditBucket(id);
+  else if (action === "edit-goal") openEditGoal(id);
+  else if (action === "contribute") openContribute(id);
+});
+
+/* ---------------- log expense form ---------------- */
+let suggestedBucketId = null;
+const noteInput = document.getElementById("log-note");
+let noteDebounce = null;
+noteInput.addEventListener("input", ()=>{
+  clearTimeout(noteDebounce);
+  noteDebounce = setTimeout(()=>{
+    const match = suggestBucket(noteInput.value);
+    const box = document.getElementById("log-suggestion");
+    if (match){
+      suggestedBucketId = match.id;
+      box.innerHTML = `<button type="button" class="suggestion-pill" id="apply-suggestion">${esc(match.icon||"")} Suggested: ${esc(match.name)}, tap to use</button>`;
+      document.getElementById("apply-suggestion").addEventListener("click", ()=>{
+        document.getElementById("log-bucket").value = match.id;
+        toast("Bucket set to "+match.name);
+      });
+    } else if (sample) {
+      box.innerHTML = `<button type="button" class="ai-btn" id="ai-suggest-bucket">✨ Ask AI to categorize</button>`;
+      document.getElementById("ai-suggest-bucket").addEventListener("click", async ()=>{
+        const b = document.getElementById("ai-suggest-bucket");
+        b.disabled = true; b.textContent = "Thinking...";
+        try{
+          const names = state.buckets.map(x=>x.name);
+          const result = await sample.json(
+            `Pick the single best matching bucket name for this expense: "${noteInput.value}". `
+            + `Choose exactly one from this list and reply with only a JSON object {"bucket": "<name>"}: ${JSON.stringify(names)}`,
+            {modelTier:"quick"}
+          );
+          const picked = state.buckets.find(x=>x.name === (result && result.bucket));
+          if (picked){ document.getElementById("log-bucket").value = picked.id; toast("Bucket set to "+picked.name); }
+          else { toast("Couldn't match a bucket"); }
+        }catch(err){ toast("AI categorization unavailable"); }
+        finally { b.disabled = false; b.textContent = "✨ Ask AI to categorize"; }
+      });
+    } else {
+      box.innerHTML = "";
+    }
+  }, 350);
+});
+
+document.getElementById("log-form").addEventListener("submit", async (e)=>{
+  e.preventDefault();
+  if (!db){ toast("Storage unavailable"); return; }
+  const amount = Number(document.getElementById("log-amount").value||0);
+  const note = document.getElementById("log-note").value.trim();
+  const bucketId = document.getElementById("log-bucket").value;
+  const date = document.getElementById("log-date").value || todayISO();
+  if (amount<=0 || !bucketId){ toast("Add an amount and pick a bucket"); return; }
+  try{
+    await db.collection("transactions").add({type:"expense", amount, note, bucketId, date, month:monthOf(date), createdAt:new Date().toISOString()});
+    const b = state.buckets.find(x=>x.id===bucketId);
+    toast(`Logged ${fmt(amount)} to ${b?b.name:"bucket"}`);
+    document.getElementById("log-amount").value = "";
+    document.getElementById("log-note").value = "";
+    document.getElementById("log-suggestion").innerHTML = "";
+    document.getElementById("log-date").value = todayISO();
+  }catch(e2){ toast("Couldn't log, try again"); }
+});
+
+/* ================= BOOT ================= */
+async function boot(){
+  document.getElementById("log-date").value = todayISO();
+  try{ db = await claude.use("db"); }catch(e){ db = null; }
+  try{ sample = await claude.use("sample"); }catch(e){ sample = null; }
+  document.getElementById("banner-nodb").hidden = !!db && window.__kharchaPersist !== false;
+  if (db){ await ensureSeed(); subscribeAll(); } else { renderAll(); }
+}
+boot();
+
+})();
+</script>
+
+</body></html>
